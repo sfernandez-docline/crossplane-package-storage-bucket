@@ -96,6 +96,10 @@ spec:
                   "crossplane.io/external-name" = name_
                   "krm.kcl.dev/composition-resource-name" = "oci-bucket"
                   "crossplane.io/composition-resource-name" = "oci-bucket"
+                  # function-kcl marca readiness vía esta annotation; sin ella
+                  # el XR queda Ready=False aunque los MRs sean Ready=True.
+                  # Mismo patrón que composition `environment`.
+                  "krm.kcl.dev/ready" = "True"
                 }
               }
               spec = {
@@ -124,6 +128,7 @@ spec:
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "bucket-info"
                   "crossplane.io/composition-resource-name" = "bucket-info"
+                  "krm.kcl.dev/ready" = "True"
                 }
               }
               spec = {
@@ -162,6 +167,7 @@ spec:
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "push-info"
                   "crossplane.io/composition-resource-name" = "push-info"
+                  "krm.kcl.dev/ready" = "True"
                 }
               }
               spec = {

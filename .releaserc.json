@@ -1,0 +1,13 @@
+{
+  "branches": [
+    "main",
+    {"name": "int", "prerelease": true},
+    {"name": "qa", "prerelease": true},
+    {"name": "staging", "prerelease": true}
+  ],
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/github"
+  ]
+}

@@ -37,5 +37,9 @@ spec:
     # Provider OCI Object Storage — la rama OCI de la Composition emite
     # objectstorage.oci.m.upbound.io/Bucket. Solo este sub-provider; NO se
     # incluye provider-oci-identity porque la Composition NO emite User/Policy.
-    - provider: xpkg.upbound.io/oracle/provider-oci-objectstorage
+    # Registry ghcr.io (no xpkg.upbound.io) — la imagen oficial de Oracle vive
+    # en GHCR y es la que instalamos via Pulumi en zone-morocco. Si pin a
+    # xpkg.upbound.io, Crossplane los considera providers distintos y trata
+    # de instalar uno paralelo (UnhealthyPackageRevision: missing dependency).
+    - provider: ghcr.io/oracle/provider-oci-objectstorage
       version: "v1.1.0"

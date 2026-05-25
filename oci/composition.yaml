@@ -1,0 +1,203 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: storage-bucket-oci
+  labels:
+    app.docline.io/type: storage-bucket
+    app.docline.io/cloud: oci
+spec:
+  compositeTypeRef:
+    apiVersion: storage.docline.io/v1alpha1
+    kind: XStorageBucket
+
+  # Solo se instala una Composition por cluster (la del cloud que aplica):
+  #   AWS clusters → storage-bucket-aws (paquete -aws)
+  #   OCI clusters → storage-bucket-oci (paquete -oci)
+  mode: Pipeline
+  pipeline:
+    - step: load-environment
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: cluster-platform
+    - step: render
+      functionRef:
+        name: function-kcl
+      input:
+        apiVersion: krm.kcl.dev/v1alpha1
+        kind: KCLRun
+        spec:
+          source: |
+            # ───────────────────────────────────────────────────────────────
+            # XStorageBucket — rama OCI:
+            #
+            # provider-oci-identity v0.1.7 NO incluye `CustomerSecretKey`, solo
+            # Group/Policy/User. Por eso esta rama:
+            #   - Crea SOLO el Bucket + Secret K8s bucket-info.
+            #   - NO crea User/Policy/CustomerSecretKey.
+            #
+            # Las credenciales S3-compat OCI (AWS_ACCESS_KEY_ID + AWS_SECRET_
+            # ACCESS_KEY) deben pre-existir en Infisical (creadas por Pulumi o
+            # manual UNA VEZ por env). Por lo tanto, en OCI NO se emite el
+            # push-creds, solo el push-info (BUCKET/ENDPOINT/REGION).
+            #
+            # Live envs (prod-*): managementPolicies sin `Delete` para que un
+            # destroy del XR NO borre el bucket en OCI. Non-live (int/qa/staging
+            # /dev/demo): managementPolicies=["*"] → delete on destroy.
+            # ───────────────────────────────────────────────────────────────
+
+            oxr = option("params").oxr
+
+            # ── env (desde namespace o spec.env override) ──────────────────
+            _ns = oxr.metadata.namespace
+            env_ = oxr.spec?.env if (oxr.spec?.env) else _ns.removeprefix("infra-")
+            assert env_ != _ns, "no se pudo derivar env: namespace='${_ns}' no empieza por 'infra-'; declara spec.env"
+
+            # ── EnvironmentConfig del cluster ──────────────────────────────
+            _ec = option("params").ctx?["apiextensions.crossplane.io/environment"] or {}
+            assert "cloud" in _ec, "EnvironmentConfig 'cluster-platform' no disponible o sin data.cloud (¿pipeline step load-environment configurado?)"
+            assert _ec.cloud == "oci", "Composition storage-bucket-oci aplicada en cluster cloud=${_ec.cloud}; instalar el paquete -aws en clusters AWS"
+            region = _ec.region
+            pcfg = _ec.ociProviderConfigRef
+            compartment = _ec.ociCompartmentId
+            tenancy_ns = _ec.ociNamespace
+            _endpoint = "https://" + tenancy_ns + ".compat.objectstorage." + region + ".oci.customer-oci.com"
+
+            # ── naming derivado ────────────────────────────────────────────
+            _base = oxr.spec.bucketName
+            name_ = _base + "-" + env_
+
+            _infisicalProject = oxr.spec?.infisicalProject or "core-secrets"
+            _infisicalPath = oxr.spec?.infisicalPath or "/storage"
+            _tier = oxr.spec?.storageTier or "Standard"
+
+            _info_secret  = name_ + "-info"
+
+            # ── Safety: managementPolicies live/non-live ───────────────────
+            _is_live = env_.startswith("prod-")
+            _mgmt_policies = ["Observe", "Create", "Update", "LateInitialize"] if _is_live else ["*"]
+
+            # ════════════════════ OCI Bucket ═══════════════════════════════
+            _bucket = {
+              apiVersion = "objectstorage.oci.m.upbound.io/v1alpha1"
+              kind = "Bucket"
+              metadata = {
+                annotations = {
+                  # external-name = nombre del bucket OCI. forProvider.name
+                  # NO existe en el schema; se infiere del external-name.
+                  "crossplane.io/external-name" = name_
+                  "krm.kcl.dev/composition-resource-name" = "oci-bucket"
+                  "crossplane.io/composition-resource-name" = "oci-bucket"
+                }
+              }
+              spec = {
+                # OCI .m. namespaced CRD: usa managementPolicies (v2),
+                # NO deletionPolicy (no existe en este schema).
+                managementPolicies = _mgmt_policies
+                providerConfigRef = {kind = "ClusterProviderConfig", name = pcfg}
+                forProvider = {
+                  # Provider Oracle v1.1.0: schema acepta `name` explícito en
+                  # forProvider, region la infiere de Workload Identity OKE.
+                  name          = name_
+                  compartmentId = compartment
+                  namespace     = tenancy_ns
+                  storageTier   = _tier
+                  accessType    = "NoPublicAccess"
+                  versioning    = "Disabled"
+                  autoTiering   = "Disabled"
+                }
+              }
+            }
+
+            _info_obj = {
+              apiVersion = "kubernetes.m.crossplane.io/v1alpha1"
+              kind = "Object"
+              metadata = {
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "bucket-info"
+                  "crossplane.io/composition-resource-name" = "bucket-info"
+                }
+              }
+              spec = {
+                providerConfigRef = {kind = "ClusterProviderConfig", name = "default"}
+                forProvider = {
+                  manifest = {
+                    apiVersion = "v1"
+                    kind = "Secret"
+                    metadata = {
+                      name = _info_secret
+                      namespace = _ns
+                    }
+                    stringData = {
+                      AWS_BUCKET = name_
+                      AWS_DEFAULT_REGION = region
+                      AWS_ENDPOINT_URL = _endpoint
+                    }
+                  }
+                }
+              }
+            }
+
+            # ════════════════════ InfisicalPushSecret push-info ════════════
+            # Solo push-info: las creds OCI Customer Secret Key NO las gestiona
+            # Crossplane (provider-oci-identity v0.1.7 no soporta el recurso).
+            # Existen en Infisical desde Pulumi/manual.
+            _push_info_obj = {
+              apiVersion = "kubernetes.m.crossplane.io/v1alpha1"
+              kind = "Object"
+              metadata = {
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "push-info"
+                  "crossplane.io/composition-resource-name" = "push-info"
+                }
+              }
+              spec = {
+                providerConfigRef = {kind = "ClusterProviderConfig", name = "default"}
+                forProvider = {
+                  manifest = {
+                    apiVersion = "secrets.infisical.com/v1alpha1"
+                    kind = "InfisicalPushSecret"
+                    metadata = {
+                      name = name_ + "-push-info"
+                      namespace = _ns
+                    }
+                    spec = {
+                      hostAPI = "http://hub-proxy.infisical.svc.cluster.local:8080/api"
+                      authentication = {
+                        universalAuth = {
+                          credentialsRef = {
+                            secretName = "infisical-eso-auth"
+                            secretNamespace = _ns
+                          }
+                        }
+                      }
+                      destination = {
+                        projectSlug = _infisicalProject
+                        environmentSlug = env_
+                        secretsPath = _infisicalPath
+                      }
+                      push = {
+                        secret = {
+                          secretName = _info_secret
+                          secretNamespace = _ns
+                        }
+                      }
+                      updatePolicy = "Replace"
+                    }
+                  }
+                }
+              }
+            }
+
+            # ════════════════════ Ensamblaje final ═════════════════════════
+            _publish = oxr.spec?.publishToInfisical or False
+            _pushes: [any] = [_push_info_obj] if _publish else []
+            _all: [any] = [_bucket, _info_obj] + _pushes
+
+            items = _all

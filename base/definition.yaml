@@ -1,0 +1,95 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xstoragebuckets.storage.docline.io
+spec:
+  group: storage.docline.io
+  scope: Namespaced
+  names:
+    kind: XStorageBucket
+    plural: xstoragebuckets
+  defaultCompositionUpdatePolicy: Automatic
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [bucketName]
+              properties:
+                # Nombre base del bucket. La Composition añade el sufijo del
+                # entorno (`-<env>`) para producir el nombre final:
+                #   spec.bucketName: x-docline-storage
+                #   namespace:       infra-prod-morocco
+                #   bucket creado:   x-docline-storage-prod-morocco
+                bucketName:
+                  type: string
+                  description: |
+                    Nombre base. La Composition produce `<bucketName>-<env>`.
+                    En AWS debe ser globalmente único; en OCI único dentro
+                    del namespace+compartment del tenancy.
+                  pattern: '^[a-z][a-z0-9-]{1,40}$'
+
+                # Override del entorno (por defecto se deriva del namespace,
+                # quitando el prefijo `infra-`).
+                env:
+                  type: string
+                  pattern: '^[a-z][a-z0-9-]{1,40}$'
+
+                # Destino del push a Infisical. Cada proyecto Docline tiene su
+                # propio project Infisical (core-secrets, wafa-secrets, …).
+                infisicalProject:
+                  type: string
+                  default: core-secrets
+                  description: |
+                    Slug del project Infisical destino del push. El env-slug
+                    de Infisical coincide con `<env>`.
+                infisicalPath:
+                  type: string
+                  default: /storage
+                  description: Folder dentro del project Infisical.
+                publishToInfisical:
+                  type: boolean
+                  default: true
+                  description: |
+                    Si false (default), la Composition crea el bucket + creds
+                    pero NO emite los dos InfisicalPushSecret. Permite preparar
+                    la pieza nueva sin sobrescribir las claves que las apps
+                    productivas leen hoy (ej. AWS_BUCKET apunta al S3 viejo
+                    durante la migración rclone).
+                    Cuando los datos estén migrados y queramos hacer cutover,
+                    cambiar a true → push se activa → pods con auto-reload
+                    reinician y empiezan a usar el bucket nuevo.
+
+                # Storage tier OCI (≈ S3 storage class). En AWS hoy se ignora
+                # (S3 usa Intelligent-Tiering / lifecycle aparte).
+                storageTier:
+                  type: string
+                  enum: [Standard, InfrequentAccess, Archive]
+                  default: Standard
+
+            status:
+              type: object
+              properties:
+                bucketName:
+                  type: string
+                  description: Nombre final del bucket (`<bucketName>-<env>`).
+                cloud:
+                  type: string
+                  description: Cloud resuelto (aws | oci).
+                region:
+                  type: string
+                credsSecretRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                  description: |
+                    Secret K8s donde Crossplane escribe AWS_ACCESS_KEY_ID +
+                    AWS_SECRET_ACCESS_KEY del User creado.

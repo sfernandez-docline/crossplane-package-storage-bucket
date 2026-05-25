@@ -1,0 +1,163 @@
+---
+# Workflow per-package para crossplane-package-storage-bucket.
+#
+# NOT SYNCED por ArgoCD (no listado en kustomization.yaml de ningún App);
+# es una plantilla submitible vía CLI:
+#
+#   argo --kube-context control-ireland -n argo-workflows submit \
+#       packages/crossplane-package-storage-bucket/workflows/release.yaml \
+#       -p branch=main          # o int/qa/staging para prerelease
+#
+# Pipeline (DAG):
+#   release ──┬─→ compute-channel
+#             └─→ xpkg-base ──┬─→ xpkg-aws  (depends -base for dep resolution)
+#                             └─→ xpkg-oci  (depends -base for dep resolution)
+#
+# Tras release.Succeeded && released=true:
+#   - xpkg-base   → ghcr.io/sfernandez-docline/crossplane-package-storage-bucket-base:VER
+#   - xpkg-aws    → ghcr.io/sfernandez-docline/crossplane-package-storage-bucket-aws:VER
+#   - xpkg-oci    → ghcr.io/sfernandez-docline/crossplane-package-storage-bucket-oci:VER
+#
+# Los 3 xpkg comparten la MISMA versión semver — clusters AWS instalan -aws
+# (que pulls -base via dependsOn), clusters OCI instalan -oci (idem).
+#
+# Templates `release-base`, `build-xpkg` viven en argo-workflows ns; los provee
+# crossplane-package-environment/workflows/02-release-base.yaml + 03-build-xpkg.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: release-storage-bucket-
+  namespace: argo-workflows
+  labels:
+    docline.io/package: crossplane-package-storage-bucket
+    docline.io/component: release-pipeline
+spec:
+  activeDeadlineSeconds: 1800
+  tolerations:
+    - key: docline.io/workload-type
+      value: batch
+      effect: NoSchedule
+  serviceAccountName: release-pipeline
+  synchronization:
+    mutexes:
+      - name: release-storage-bucket
+  podMetadata:
+    annotations:
+      karpenter.sh/do-not-disrupt: "true"
+  ttlStrategy:
+    secondsAfterCompletion: 600
+    secondsAfterSuccess: 300
+    secondsAfterFailure: 604800
+  arguments:
+    parameters:
+      - name: branch
+        value: main
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 5Gi
+  securityContext:
+    fsGroup: 0
+    runAsUser: 0
+  entrypoint: pipeline
+  templates:
+    - name: pipeline
+      dag:
+        tasks:
+          - name: release
+            templateRef:
+              name: release-base
+              template: release
+            arguments:
+              parameters:
+                - name: repoURL
+                  value: "https://github.com/sfernandez-docline/crossplane-package-storage-bucket.git"
+                - name: branch
+                  value: "{{workflow.parameters.branch}}"
+
+          # compute-channel: deriva RELEASE_CHANNEL según la rama. main →
+          # "stable", otras → la rama directamente.
+          - name: compute-channel
+            depends: "release.Succeeded"
+            when: '{{tasks.release.outputs.parameters.released}} == true'
+            inline:
+              script:
+                image: alpine:3.20
+                command: [sh]
+                source: |
+                  set -eu
+                  BRANCH="{{workflow.parameters.branch}}"
+                  if [ "$BRANCH" = "main" ]; then
+                    CHANNEL="stable"
+                  else
+                    CHANNEL="$BRANCH"
+                  fi
+                  printf '%s' "$CHANNEL" > /tmp/channel
+                  echo "branch=$BRANCH CHANNEL='$CHANNEL'"
+              outputs:
+                parameters:
+                  - name: channel
+                    valueFrom: { path: /tmp/channel }
+
+          # xpkg-base: XRD compartido + deps comunes. Construido primero
+          # porque -aws y -oci lo declaran como dependsOn (configuration).
+          - name: xpkg-base
+            depends: "release.Succeeded && compute-channel.Succeeded"
+            when: '{{tasks.release.outputs.parameters.released}} == true'
+            templateRef:
+              name: build-xpkg
+              template: build-and-push
+            arguments:
+              parameters:
+                - name: repoURL
+                  value: "https://github.com/sfernandez-docline/crossplane-package-storage-bucket.git"
+                - name: branch
+                  value: "{{workflow.parameters.branch}}"
+                - name: version
+                  value: "{{tasks.release.outputs.parameters.version}}"
+                - name: packageName
+                  value: "crossplane-package-storage-bucket-base"
+                - name: packageRoot
+                  value: "base"
+
+          - name: xpkg-aws
+            depends: "xpkg-base.Succeeded"
+            when: '{{tasks.release.outputs.parameters.released}} == true'
+            templateRef:
+              name: build-xpkg
+              template: build-and-push
+            arguments:
+              parameters:
+                - name: repoURL
+                  value: "https://github.com/sfernandez-docline/crossplane-package-storage-bucket.git"
+                - name: branch
+                  value: "{{workflow.parameters.branch}}"
+                - name: version
+                  value: "{{tasks.release.outputs.parameters.version}}"
+                - name: packageName
+                  value: "crossplane-package-storage-bucket-aws"
+                - name: packageRoot
+                  value: "aws"
+
+          - name: xpkg-oci
+            depends: "xpkg-base.Succeeded"
+            when: '{{tasks.release.outputs.parameters.released}} == true'
+            templateRef:
+              name: build-xpkg
+              template: build-and-push
+            arguments:
+              parameters:
+                - name: repoURL
+                  value: "https://github.com/sfernandez-docline/crossplane-package-storage-bucket.git"
+                - name: branch
+                  value: "{{workflow.parameters.branch}}"
+                - name: version
+                  value: "{{tasks.release.outputs.parameters.version}}"
+                - name: packageName
+                  value: "crossplane-package-storage-bucket-oci"
+                - name: packageRoot
+                  value: "oci"

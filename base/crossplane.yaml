@@ -1,0 +1,44 @@
+apiVersion: meta.pkg.crossplane.io/v1
+kind: Configuration
+metadata:
+  name: crossplane-package-storage-bucket-base
+  annotations:
+    meta.crossplane.io/maintainer: "Docline platform"
+    meta.crossplane.io/source: "https://github.com/sfernandez-docline/crossplane-package-storage-bucket"
+    meta.crossplane.io/license: "Apache-2.0"
+    meta.crossplane.io/description: |
+      Paquete base del refactor multi-paquete cloud-specific:
+
+        crossplane-package-storage-bucket-base/   ← este paquete (solo XRD)
+        crossplane-package-storage-bucket-aws/    ← Composition AWS + AWS providers
+        crossplane-package-storage-bucket-oci/    ← Composition OCI + OCI providers
+
+      Contiene únicamente el XRD `XStorageBucket` y las dependencias comunes
+      (function-kcl, function-environment-configs, provider-kubernetes).
+      Los Compositions cloud-specific y sus providers viven en `-aws` y
+      `-oci` separados, de modo que cada cluster solo instala el cloud que
+      necesita y no carga CRDs/controllers del otro cloud.
+
+      Cada cluster declara el paquete cloud-specific que aplica:
+        - Hub control-ireland (AWS)  → crossplane-package-storage-bucket-aws
+        - zone-non-live (AWS)        → crossplane-package-storage-bucket-aws
+        - zone-morocco (OCI)         → crossplane-package-storage-bucket-oci
+      El paquete cloud-specific declara este -base como dependsOn, por lo
+      que basta instalar el -aws o -oci para arrastrar el XRD aquí.
+spec:
+  crossplane:
+    version: ">=v1.18.0-0"
+  dependsOn:
+    # function-environment-configs: inyecta el EnvironmentConfig `cluster-platform`
+    # en el ctx del pipeline (Crossplane v2 ya no soporta spec.environment).
+    # Aunque este -base no tiene Composition, lo declaramos aquí para que el
+    # cluster lo tenga disponible aun si se instala primero el -base.
+    - function: xpkg.upbound.io/crossplane-contrib/function-environment-configs
+      version: ">=v0.4.0,<v1.0.0"
+    # function-kcl: render del switch cloud + assembly de los MRs.
+    - function: xpkg.upbound.io/crossplane-contrib/function-kcl
+      version: "v0.12.1"
+    # provider-kubernetes: emite Secret K8s `<name>-info` y los dos
+    # InfisicalPushSecret como Objects. Cloud-independent.
+    - provider: xpkg.upbound.io/crossplane-contrib/provider-kubernetes
+      version: ">=v0.14.0,<v2.0.0"

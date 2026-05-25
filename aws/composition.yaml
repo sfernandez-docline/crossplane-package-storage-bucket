@@ -1,0 +1,380 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: storage-bucket-aws
+  labels:
+    app.docline.io/type: storage-bucket
+    app.docline.io/cloud: aws
+spec:
+  compositeTypeRef:
+    apiVersion: storage.docline.io/v1alpha1
+    kind: XStorageBucket
+
+  # Solo se instala una Composition por cluster (la del cloud que aplica):
+  #   AWS clusters → storage-bucket-aws (paquete -aws)
+  #   OCI clusters → storage-bucket-oci (paquete -oci)
+  # Crossplane elige automáticamente la única Composition disponible para el
+  # XRD `xstoragebuckets.storage.docline.io`. El XR claim no especifica
+  # compositionRef ni compositionSelector — el match es por kind+único.
+  mode: Pipeline
+  pipeline:
+    - step: load-environment
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: cluster-platform
+    - step: render
+      functionRef:
+        name: function-kcl
+      input:
+        apiVersion: krm.kcl.dev/v1alpha1
+        kind: KCLRun
+        spec:
+          source: |
+            # ───────────────────────────────────────────────────────────────
+            # XStorageBucket — rama AWS (patrón A — atomic):
+            #
+            #   1. iam.User             (path /docline/storage/)
+            #   2. iam.AccessKey        → writeConnectionSecretToRef
+            #                             Secret K8s <name>-creds
+            #   3. iam.UserPolicy       inline `s3:*` solo sobre el bucket
+            #   4. s3.Bucket            + SSE + PublicAccessBlock + Ownership
+            #   5. Secret K8s <name>-info  (BUCKET, REGION — el SDK infiere endpoint)
+            #   6. InfisicalPushSecret push-creds  (si publishToInfisical=true)
+            #   7. InfisicalPushSecret push-info   (si publishToInfisical=true)
+            #
+            # Borrar el XR borra los 7 (deletionPolicy default = Delete).
+            # En envs live (prod-*), deletionPolicy = Orphan: los recursos
+            # cloud permanecen.
+            # ───────────────────────────────────────────────────────────────
+
+            oxr = option("params").oxr
+
+            # ── env (desde namespace o spec.env override) ──────────────────
+            _ns = oxr.metadata.namespace
+            env_ = oxr.spec?.env if (oxr.spec?.env) else _ns.removeprefix("infra-")
+            assert env_ != _ns, "no se pudo derivar env: namespace='${_ns}' no empieza por 'infra-'; declara spec.env"
+
+            # ── EnvironmentConfig del cluster ──────────────────────────────
+            _ec = option("params").ctx?["apiextensions.crossplane.io/environment"] or {}
+            assert "cloud" in _ec, "EnvironmentConfig 'cluster-platform' no disponible o sin data.cloud (¿pipeline step load-environment configurado?)"
+            assert _ec.cloud == "aws", "Composition storage-bucket-aws aplicada en cluster cloud=${_ec.cloud}; instalar el paquete -oci en clusters OCI"
+            region = _ec.region
+            pcfg = _ec.awsProviderConfigRef
+
+            # ── naming derivado ────────────────────────────────────────────
+            _base = oxr.spec.bucketName
+            name_ = _base + "-" + env_
+
+            _infisicalProject = oxr.spec?.infisicalProject or "core-secrets"
+            _infisicalPath = oxr.spec?.infisicalPath or "/storage"
+
+            _creds_secret = name_ + "-creds"
+            _info_secret  = name_ + "-info"
+
+            # ── Safety: deletionPolicy según live/non-live ─────────────────
+            _is_live = env_.startswith("prod-")
+            _del_policy = "Orphan" if _is_live else "Delete"
+
+            # ════════════════════ AWS resources ════════════════════════════
+            _user = {
+              apiVersion = "iam.aws.upbound.io/v1beta1"
+              kind = "User"
+              metadata = {
+                annotations = {
+                  "crossplane.io/external-name" = "storage-" + name_
+                  "krm.kcl.dev/composition-resource-name" = "iam-user"
+                  "crossplane.io/composition-resource-name" = "iam-user"
+                }
+              }
+              spec = {
+                deletionPolicy = _del_policy
+                providerConfigRef = {name = pcfg}
+                forProvider = {
+                  path = "/docline/storage/"
+                  tags = {
+                    "docline.io/managed-by" = "crossplane"
+                    "docline.io/env" = env_
+                    "docline.io/bucket" = name_
+                  }
+                }
+              }
+            }
+
+            _key = {
+              apiVersion = "iam.aws.upbound.io/v1beta1"
+              kind = "AccessKey"
+              metadata = {
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "iam-accesskey"
+                  "crossplane.io/composition-resource-name" = "iam-accesskey"
+                }
+              }
+              spec = {
+                deletionPolicy = _del_policy
+                providerConfigRef = {name = pcfg}
+                forProvider = {
+                  userSelector = {matchControllerRef = True}
+                }
+                writeConnectionSecretToRef = {
+                  name = _creds_secret
+                  namespace = _ns
+                }
+              }
+            }
+
+            _policy_doc = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["arn:aws:s3:::' + name_ + '","arn:aws:s3:::' + name_ + '/*"]}]}'
+            _userpolicy = {
+              apiVersion = "iam.aws.upbound.io/v1beta1"
+              kind = "UserPolicy"
+              metadata = {
+                annotations = {
+                  "crossplane.io/external-name" = "storage-bucket-access"
+                  "krm.kcl.dev/composition-resource-name" = "iam-userpolicy"
+                  "crossplane.io/composition-resource-name" = "iam-userpolicy"
+                }
+              }
+              spec = {
+                deletionPolicy = _del_policy
+                providerConfigRef = {name = pcfg}
+                forProvider = {
+                  userSelector = {matchControllerRef = True}
+                  policy = _policy_doc
+                }
+              }
+            }
+
+            _bucket = {
+              apiVersion = "s3.aws.upbound.io/v1beta1"
+              kind = "Bucket"
+              metadata = {
+                annotations = {
+                  "crossplane.io/external-name" = name_
+                  "krm.kcl.dev/composition-resource-name" = "s3-bucket"
+                  "crossplane.io/composition-resource-name" = "s3-bucket"
+                }
+              }
+              spec = {
+                deletionPolicy = _del_policy
+                providerConfigRef = {name = pcfg}
+                forProvider = {region = region}
+              }
+            }
+
+            _sse = {
+              apiVersion = "s3.aws.upbound.io/v1beta1"
+              kind = "BucketServerSideEncryptionConfiguration"
+              metadata = {
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "s3-sse"
+                  "crossplane.io/composition-resource-name" = "s3-sse"
+                }
+              }
+              spec = {
+                deletionPolicy = _del_policy
+                providerConfigRef = {name = pcfg}
+                forProvider = {
+                  region = region
+                  bucket = name_
+                  rule = [{
+                    applyServerSideEncryptionByDefault = {sseAlgorithm = "AES256"}
+                    bucketKeyEnabled = True
+                  }]
+                }
+              }
+            }
+
+            _pab = {
+              apiVersion = "s3.aws.upbound.io/v1beta1"
+              kind = "BucketPublicAccessBlock"
+              metadata = {
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "s3-pab"
+                  "crossplane.io/composition-resource-name" = "s3-pab"
+                }
+              }
+              spec = {
+                deletionPolicy = _del_policy
+                providerConfigRef = {name = pcfg}
+                forProvider = {
+                  region = region
+                  bucket = name_
+                  blockPublicAcls       = True
+                  blockPublicPolicy     = True
+                  ignorePublicAcls      = True
+                  restrictPublicBuckets = True
+                }
+              }
+            }
+
+            _own = {
+              apiVersion = "s3.aws.upbound.io/v1beta1"
+              kind = "BucketOwnershipControls"
+              metadata = {
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "s3-ownership"
+                  "crossplane.io/composition-resource-name" = "s3-ownership"
+                }
+              }
+              spec = {
+                deletionPolicy = _del_policy
+                providerConfigRef = {name = pcfg}
+                forProvider = {
+                  region = region
+                  bucket = name_
+                  rule = {objectOwnership = "BucketOwnerEnforced"}
+                }
+              }
+            }
+
+            # Secret K8s no-sensible vía provider-kubernetes.Object.
+            # AWS no necesita AWS_ENDPOINT_URL — el SDK usa el default por region.
+            _info_obj = {
+              apiVersion = "kubernetes.m.crossplane.io/v1alpha1"
+              kind = "Object"
+              metadata = {
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "bucket-info"
+                  "crossplane.io/composition-resource-name" = "bucket-info"
+                }
+              }
+              spec = {
+                providerConfigRef = {kind = "ClusterProviderConfig", name = "default"}
+                forProvider = {
+                  manifest = {
+                    apiVersion = "v1"
+                    kind = "Secret"
+                    metadata = {
+                      name = _info_secret
+                      namespace = _ns
+                    }
+                    stringData = {
+                      AWS_BUCKET = name_
+                      AWS_DEFAULT_REGION = region
+                    }
+                  }
+                }
+              }
+            }
+
+            # ════════════════════ Pieza común: InfisicalPushSecret ═════════
+            # Mapping del Secret K8s creado por writeConnectionSecretToRef
+            # (iam.AccessKey) a las claves canónicas que esperan las apps:
+            #   accessKeyId      → AWS_ACCESS_KEY_ID
+            #   secretAccessKey  → AWS_SECRET_ACCESS_KEY
+            # Memoria feedback_infisicalpushsecret_template_value: el placeholder
+            # requiere `.Value` para extraer el valor del Secret.
+            _creds_template_data = {
+              "AWS_ACCESS_KEY_ID"     = "{{ .accessKeyId.Value }}"
+              "AWS_SECRET_ACCESS_KEY" = "{{ .secretAccessKey.Value }}"
+            }
+
+            _push_creds_obj = {
+              apiVersion = "kubernetes.m.crossplane.io/v1alpha1"
+              kind = "Object"
+              metadata = {
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "push-creds"
+                  "crossplane.io/composition-resource-name" = "push-creds"
+                }
+              }
+              spec = {
+                providerConfigRef = {kind = "ClusterProviderConfig", name = "default"}
+                forProvider = {
+                  manifest = {
+                    apiVersion = "secrets.infisical.com/v1alpha1"
+                    kind = "InfisicalPushSecret"
+                    metadata = {
+                      name = name_ + "-push-creds"
+                      namespace = _ns
+                    }
+                    spec = {
+                      hostAPI = "http://hub-proxy.infisical.svc.cluster.local:8080/api"
+                      authentication = {
+                        universalAuth = {
+                          credentialsRef = {
+                            secretName = "infisical-eso-auth"
+                            secretNamespace = _ns
+                          }
+                        }
+                      }
+                      destination = {
+                        projectSlug = _infisicalProject
+                        environmentSlug = env_
+                        secretsPath = _infisicalPath
+                      }
+                      push = {
+                        secret = {
+                          secretName = _creds_secret
+                          secretNamespace = _ns
+                          template = {
+                            data = _creds_template_data
+                          }
+                        }
+                      }
+                      updatePolicy = "Replace"
+                    }
+                  }
+                }
+              }
+            }
+
+            _push_info_obj = {
+              apiVersion = "kubernetes.m.crossplane.io/v1alpha1"
+              kind = "Object"
+              metadata = {
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "push-info"
+                  "crossplane.io/composition-resource-name" = "push-info"
+                }
+              }
+              spec = {
+                providerConfigRef = {kind = "ClusterProviderConfig", name = "default"}
+                forProvider = {
+                  manifest = {
+                    apiVersion = "secrets.infisical.com/v1alpha1"
+                    kind = "InfisicalPushSecret"
+                    metadata = {
+                      name = name_ + "-push-info"
+                      namespace = _ns
+                    }
+                    spec = {
+                      hostAPI = "http://hub-proxy.infisical.svc.cluster.local:8080/api"
+                      authentication = {
+                        universalAuth = {
+                          credentialsRef = {
+                            secretName = "infisical-eso-auth"
+                            secretNamespace = _ns
+                          }
+                        }
+                      }
+                      destination = {
+                        projectSlug = _infisicalProject
+                        environmentSlug = env_
+                        secretsPath = _infisicalPath
+                      }
+                      push = {
+                        secret = {
+                          secretName = _info_secret
+                          secretNamespace = _ns
+                        }
+                      }
+                      updatePolicy = "Replace"
+                    }
+                  }
+                }
+              }
+            }
+
+            # ════════════════════ Ensamblaje final ═════════════════════════
+            _publish = oxr.spec?.publishToInfisical or False
+            _pushes: [any] = [_push_creds_obj, _push_info_obj] if _publish else []
+            _all: [any] = [_user, _key, _userpolicy, _bucket, _sse, _pab, _own, _info_obj] + _pushes
+
+            items = _all

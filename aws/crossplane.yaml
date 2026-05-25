@@ -1,0 +1,45 @@
+apiVersion: meta.pkg.crossplane.io/v1
+kind: Configuration
+metadata:
+  name: crossplane-package-storage-bucket-aws
+  annotations:
+    meta.crossplane.io/maintainer: "Docline platform"
+    meta.crossplane.io/source: "https://github.com/sfernandez-docline/crossplane-package-storage-bucket"
+    meta.crossplane.io/license: "Apache-2.0"
+    meta.crossplane.io/description: |
+      Variante AWS del paquete XStorageBucket multi-cloud.
+      Composition `storage-bucket-aws` que provisiona, vía un solo XR:
+        - iam.User              (path /docline/storage/)
+        - iam.AccessKey         (writeConnectionSecretToRef → <name>-creds)
+        - iam.UserPolicy        (s3:* scoped al bucket)
+        - s3.Bucket + SSE + PublicAccessBlock + OwnershipControls
+        - Secret K8s <name>-info (BUCKET / REGION)
+        - 2× InfisicalPushSecret (creds + info) → <infisicalProject>/<env><path>
+
+      Se instala SOLO en clusters cloud=aws (Hub control-ireland, zone-non-live).
+      Para zone-morocco (OCI), instalar `crossplane-package-storage-bucket-oci`.
+
+      Cada cluster instala SOLO el paquete correspondiente a su cloud. No
+      hay duplicación de CRDs ni de pods controller del otro cloud.
+spec:
+  crossplane:
+    version: ">=v1.18.0-0"
+  dependsOn:
+    # XRD compartido (XStorageBucket) en el paquete -base.
+    - configuration: ghcr.io/sfernandez-docline/crossplane-package-storage-bucket-base
+      version: ">=v0.6.0"
+    # Funciones del pipeline (también declaradas en -base; el resolver Crossplane
+    # tolera dependencias duplicadas con versión compatible).
+    - function: xpkg.upbound.io/crossplane-contrib/function-environment-configs
+      version: ">=v0.4.0,<v1.0.0"
+    - function: xpkg.upbound.io/crossplane-contrib/function-kcl
+      version: "v0.12.1"
+    - provider: xpkg.upbound.io/crossplane-contrib/provider-kubernetes
+      version: ">=v0.14.0,<v2.0.0"
+    # Providers AWS — los emite la rama AWS de la Composition.
+    - provider: xpkg.crossplane.io/crossplane-contrib/provider-family-aws
+      version: "v1.21.1"
+    - provider: xpkg.crossplane.io/crossplane-contrib/provider-aws-iam
+      version: "v1.21.1"
+    - provider: xpkg.crossplane.io/crossplane-contrib/provider-aws-s3
+      version: "v1.21.1"

@@ -1,0 +1,41 @@
+apiVersion: meta.pkg.crossplane.io/v1
+kind: Configuration
+metadata:
+  name: crossplane-package-storage-bucket-oci
+  annotations:
+    meta.crossplane.io/maintainer: "Docline platform"
+    meta.crossplane.io/source: "https://github.com/sfernandez-docline/crossplane-package-storage-bucket"
+    meta.crossplane.io/license: "Apache-2.0"
+    meta.crossplane.io/description: |
+      Variante OCI del paquete XStorageBucket multi-cloud.
+      Composition `storage-bucket-oci` que provisiona, vía un solo XR:
+        - objectstorage.Bucket (compartment + namespace OCI)
+        - Secret K8s <name>-info (BUCKET / REGION / ENDPOINT_URL S3-compat)
+        - 1× InfisicalPushSecret push-info → <infisicalProject>/<env><path>
+
+      NO emite User/Policy/CustomerSecretKey: provider-oci-identity v0.1.7
+      no incluye CustomerSecretKey. Las credenciales S3-compat OCI
+      (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) preexisten en Infisical
+      (Pulumi fase 0 o manual UNA VEZ por env).
+
+      Se instala SOLO en clusters cloud=oci (zone-morocco).
+      Para clusters AWS (Hub, zone-non-live), usar `crossplane-package-storage-bucket-aws`.
+spec:
+  crossplane:
+    version: ">=v1.18.0-0"
+  dependsOn:
+    # XRD compartido (XStorageBucket) en el paquete -base.
+    - configuration: ghcr.io/sfernandez-docline/crossplane-package-storage-bucket-base
+      version: ">=v0.6.0"
+    # Funciones del pipeline (también declaradas en -base).
+    - function: xpkg.upbound.io/crossplane-contrib/function-environment-configs
+      version: ">=v0.4.0,<v1.0.0"
+    - function: xpkg.upbound.io/crossplane-contrib/function-kcl
+      version: "v0.12.1"
+    - provider: xpkg.upbound.io/crossplane-contrib/provider-kubernetes
+      version: ">=v0.14.0,<v2.0.0"
+    # Provider OCI Object Storage — la rama OCI de la Composition emite
+    # objectstorage.oci.m.upbound.io/Bucket. Solo este sub-provider; NO se
+    # incluye provider-oci-identity porque la Composition NO emite User/Policy.
+    - provider: xpkg.upbound.io/oracle/provider-oci-objectstorage
+      version: "v1.1.0"

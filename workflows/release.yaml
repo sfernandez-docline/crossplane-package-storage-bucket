@@ -60,6 +60,14 @@ spec:
         resources:
           requests:
             storage: 5Gi
+  # build-xpkg WorkflowTemplate monta /secret/gh — necesario para
+  # crossplane xpkg push contra ghcr.io (auth via PAT del Secret github-pat
+  # provisionado en argo-workflows ns).
+  volumes:
+    - name: gh-pat
+      secret:
+        secretName: github-pat
+        defaultMode: 0400
   securityContext:
     fsGroup: 0
     runAsUser: 0

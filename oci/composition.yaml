@@ -34,6 +34,8 @@ spec:
         kind: KCLRun
         spec:
           source: |
+            import base64
+
             # ───────────────────────────────────────────────────────────────
             # XStorageBucket — rama OCI:
             #
@@ -134,10 +136,15 @@ spec:
                       name = _info_secret
                       namespace = _ns
                     }
-                    stringData = {
-                      AWS_BUCKET = name_
-                      AWS_DEFAULT_REGION = region
-                      AWS_ENDPOINT_URL = _endpoint
+                    # data (base64) en lugar de stringData: provider-kubernetes
+                    # v1.2.1 hace SSA-tracking sobre la clave que escribes; si es
+                    # stringData, la API server la convierte a data en write y la
+                    # omite en read, rompiendo ExtractInto con
+                    # "expected map, got <nil>". Ver feedback_storage_bucket_stringdata_ssa
+                    data = {
+                      AWS_BUCKET = base64.encode(name_)
+                      AWS_DEFAULT_REGION = base64.encode(region)
+                      AWS_ENDPOINT_URL = base64.encode(_endpoint)
                     }
                   }
                 }

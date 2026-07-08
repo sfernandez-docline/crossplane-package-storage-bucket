@@ -136,15 +136,37 @@ spec:
             }
 
             _policy_doc = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["arn:aws:s3:::' + name_ + '","arn:aws:s3:::' + name_ + '/*"]}]}'
-            _userpolicy = {
+            # provider-aws-iam v1.21.1 no tiene kind UserPolicy (inline). Patrón
+            # correcto: Policy (standalone) + UserPolicyAttachment (adjunta al user).
+            _policy = {
               apiVersion = "iam.aws.upbound.io/v1beta1"
-              kind = "UserPolicy"
+              kind = "Policy"
               metadata = {
                 name = name_ + "-policy"
                 annotations = {
-                  "crossplane.io/external-name" = "storage-bucket-access"
-                  "krm.kcl.dev/composition-resource-name" = "iam-userpolicy"
-                  "crossplane.io/composition-resource-name" = "iam-userpolicy"
+                  "crossplane.io/external-name" = name_ + "-access"
+                  "krm.kcl.dev/composition-resource-name" = "iam-policy"
+                  "crossplane.io/composition-resource-name" = "iam-policy"
+                  "krm.kcl.dev/ready" = "True"
+                }
+              }
+              spec = {
+                deletionPolicy = _del_policy
+                providerConfigRef = {name = pcfg}
+                forProvider = {
+                  policy = _policy_doc
+                }
+              }
+            }
+
+            _userpolicyattach = {
+              apiVersion = "iam.aws.upbound.io/v1beta1"
+              kind = "UserPolicyAttachment"
+              metadata = {
+                name = name_ + "-polattach"
+                annotations = {
+                  "krm.kcl.dev/composition-resource-name" = "iam-userpolicyattachment"
+                  "crossplane.io/composition-resource-name" = "iam-userpolicyattachment"
                   "krm.kcl.dev/ready" = "True"
                 }
               }
@@ -153,7 +175,7 @@ spec:
                 providerConfigRef = {name = pcfg}
                 forProvider = {
                   userSelector = {matchControllerRef = True}
-                  policy = _policy_doc
+                  policyArnSelector = {matchControllerRef = True}
                 }
               }
             }
@@ -399,6 +421,6 @@ spec:
             # ════════════════════ Ensamblaje final ═════════════════════════
             _publish = oxr.spec?.publishToInfisical or False
             _pushes: [any] = [_push_creds_obj, _push_info_obj] if _publish else []
-            _all: [any] = [_user, _key, _userpolicy, _bucket, _sse, _pab, _own, _info_obj] + _pushes
+            _all: [any] = [_user, _key, _policy, _userpolicyattach, _bucket, _sse, _pab, _own, _info_obj] + _pushes
 
             items = _all

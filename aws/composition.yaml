@@ -89,6 +89,7 @@ spec:
               apiVersion = "iam.aws.upbound.io/v1beta1"
               kind = "User"
               metadata = {
+                name = name_ + "-user"
                 annotations = {
                   "crossplane.io/external-name" = "storage-" + name_
                   "krm.kcl.dev/composition-resource-name" = "iam-user"
@@ -114,6 +115,7 @@ spec:
               apiVersion = "iam.aws.upbound.io/v1beta1"
               kind = "AccessKey"
               metadata = {
+                name = name_ + "-key"
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "iam-accesskey"
                   "crossplane.io/composition-resource-name" = "iam-accesskey"
@@ -138,6 +140,7 @@ spec:
               apiVersion = "iam.aws.upbound.io/v1beta1"
               kind = "UserPolicy"
               metadata = {
+                name = name_ + "-policy"
                 annotations = {
                   "crossplane.io/external-name" = "storage-bucket-access"
                   "krm.kcl.dev/composition-resource-name" = "iam-userpolicy"
@@ -159,6 +162,7 @@ spec:
               apiVersion = "s3.aws.upbound.io/v1beta1"
               kind = "Bucket"
               metadata = {
+                name = name_ + "-bkt"
                 annotations = {
                   "crossplane.io/external-name" = name_
                   "krm.kcl.dev/composition-resource-name" = "s3-bucket"
@@ -177,6 +181,7 @@ spec:
               apiVersion = "s3.aws.upbound.io/v1beta1"
               kind = "BucketServerSideEncryptionConfiguration"
               metadata = {
+                name = name_ + "-sse"
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "s3-sse"
                   "crossplane.io/composition-resource-name" = "s3-sse"
@@ -201,6 +206,7 @@ spec:
               apiVersion = "s3.aws.upbound.io/v1beta1"
               kind = "BucketPublicAccessBlock"
               metadata = {
+                name = name_ + "-pab"
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "s3-pab"
                   "crossplane.io/composition-resource-name" = "s3-pab"
@@ -225,6 +231,7 @@ spec:
               apiVersion = "s3.aws.upbound.io/v1beta1"
               kind = "BucketOwnershipControls"
               metadata = {
+                name = name_ + "-own"
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "s3-ownership"
                   "crossplane.io/composition-resource-name" = "s3-ownership"

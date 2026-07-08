@@ -38,8 +38,8 @@ spec:
       version: ">=v0.14.0,<v2.0.0"
     # Providers AWS — los emite la rama AWS de la Composition.
     - provider: xpkg.crossplane.io/crossplane-contrib/provider-family-aws
-      version: "v1.21.1"
+      version: ">=v2.0.0"
     - provider: xpkg.crossplane.io/crossplane-contrib/provider-aws-iam
-      version: "v1.21.1"
+      version: ">=v2.0.0"
     - provider: xpkg.crossplane.io/crossplane-contrib/provider-aws-s3
-      version: "v1.21.1"
+      version: ">=v2.0.0"

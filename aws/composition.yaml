@@ -86,10 +86,11 @@ spec:
 
             # ════════════════════ AWS resources ════════════════════════════
             _user = {
-              apiVersion = "iam.aws.upbound.io/v1beta1"
+              apiVersion = "iam.aws.m.upbound.io/v1beta1"
               kind = "User"
               metadata = {
                 name = name_ + "-user"
+                namespace = _ns
                 annotations = {
                   "crossplane.io/external-name" = "storage-" + name_
                   "krm.kcl.dev/composition-resource-name" = "iam-user"
@@ -99,7 +100,7 @@ spec:
               }
               spec = {
                 deletionPolicy = _del_policy
-                providerConfigRef = {name = pcfg}
+                providerConfigRef = {name = pcfg, kind = "ClusterProviderConfig"}
                 forProvider = {
                   path = "/docline/storage/"
                   tags = {
@@ -112,10 +113,11 @@ spec:
             }
 
             _key = {
-              apiVersion = "iam.aws.upbound.io/v1beta1"
+              apiVersion = "iam.aws.m.upbound.io/v1beta1"
               kind = "AccessKey"
               metadata = {
                 name = name_ + "-key"
+                namespace = _ns
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "iam-accesskey"
                   "crossplane.io/composition-resource-name" = "iam-accesskey"
@@ -124,13 +126,12 @@ spec:
               }
               spec = {
                 deletionPolicy = _del_policy
-                providerConfigRef = {name = pcfg}
+                providerConfigRef = {name = pcfg, kind = "ClusterProviderConfig"}
                 forProvider = {
                   userSelector = {matchControllerRef = True}
                 }
                 writeConnectionSecretToRef = {
                   name = _creds_secret
-                  namespace = _ns
                 }
               }
             }
@@ -139,10 +140,11 @@ spec:
             # provider-aws-iam v1.21.1 no tiene kind UserPolicy (inline). Patrón
             # correcto: Policy (standalone) + UserPolicyAttachment (adjunta al user).
             _policy = {
-              apiVersion = "iam.aws.upbound.io/v1beta1"
+              apiVersion = "iam.aws.m.upbound.io/v1beta1"
               kind = "Policy"
               metadata = {
                 name = name_ + "-policy"
+                namespace = _ns
                 annotations = {
                   "crossplane.io/external-name" = name_ + "-access"
                   "krm.kcl.dev/composition-resource-name" = "iam-policy"
@@ -152,7 +154,7 @@ spec:
               }
               spec = {
                 deletionPolicy = _del_policy
-                providerConfigRef = {name = pcfg}
+                providerConfigRef = {name = pcfg, kind = "ClusterProviderConfig"}
                 forProvider = {
                   policy = _policy_doc
                 }
@@ -160,10 +162,11 @@ spec:
             }
 
             _userpolicyattach = {
-              apiVersion = "iam.aws.upbound.io/v1beta1"
+              apiVersion = "iam.aws.m.upbound.io/v1beta1"
               kind = "UserPolicyAttachment"
               metadata = {
                 name = name_ + "-polattach"
+                namespace = _ns
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "iam-userpolicyattachment"
                   "crossplane.io/composition-resource-name" = "iam-userpolicyattachment"
@@ -172,7 +175,7 @@ spec:
               }
               spec = {
                 deletionPolicy = _del_policy
-                providerConfigRef = {name = pcfg}
+                providerConfigRef = {name = pcfg, kind = "ClusterProviderConfig"}
                 forProvider = {
                   userSelector = {matchControllerRef = True}
                   policyArnSelector = {matchControllerRef = True}
@@ -181,10 +184,11 @@ spec:
             }
 
             _bucket = {
-              apiVersion = "s3.aws.upbound.io/v1beta1"
+              apiVersion = "s3.aws.m.upbound.io/v1beta1"
               kind = "Bucket"
               metadata = {
                 name = name_ + "-bkt"
+                namespace = _ns
                 annotations = {
                   "crossplane.io/external-name" = name_
                   "krm.kcl.dev/composition-resource-name" = "s3-bucket"
@@ -194,16 +198,17 @@ spec:
               }
               spec = {
                 deletionPolicy = _del_policy
-                providerConfigRef = {name = pcfg}
+                providerConfigRef = {name = pcfg, kind = "ClusterProviderConfig"}
                 forProvider = {region = region}
               }
             }
 
             _sse = {
-              apiVersion = "s3.aws.upbound.io/v1beta1"
+              apiVersion = "s3.aws.m.upbound.io/v1beta1"
               kind = "BucketServerSideEncryptionConfiguration"
               metadata = {
                 name = name_ + "-sse"
+                namespace = _ns
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "s3-sse"
                   "crossplane.io/composition-resource-name" = "s3-sse"
@@ -212,7 +217,7 @@ spec:
               }
               spec = {
                 deletionPolicy = _del_policy
-                providerConfigRef = {name = pcfg}
+                providerConfigRef = {name = pcfg, kind = "ClusterProviderConfig"}
                 forProvider = {
                   region = region
                   bucket = name_
@@ -225,10 +230,11 @@ spec:
             }
 
             _pab = {
-              apiVersion = "s3.aws.upbound.io/v1beta1"
+              apiVersion = "s3.aws.m.upbound.io/v1beta1"
               kind = "BucketPublicAccessBlock"
               metadata = {
                 name = name_ + "-pab"
+                namespace = _ns
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "s3-pab"
                   "crossplane.io/composition-resource-name" = "s3-pab"
@@ -237,7 +243,7 @@ spec:
               }
               spec = {
                 deletionPolicy = _del_policy
-                providerConfigRef = {name = pcfg}
+                providerConfigRef = {name = pcfg, kind = "ClusterProviderConfig"}
                 forProvider = {
                   region = region
                   bucket = name_
@@ -250,10 +256,11 @@ spec:
             }
 
             _own = {
-              apiVersion = "s3.aws.upbound.io/v1beta1"
+              apiVersion = "s3.aws.m.upbound.io/v1beta1"
               kind = "BucketOwnershipControls"
               metadata = {
                 name = name_ + "-own"
+                namespace = _ns
                 annotations = {
                   "krm.kcl.dev/composition-resource-name" = "s3-ownership"
                   "crossplane.io/composition-resource-name" = "s3-ownership"
@@ -262,7 +269,7 @@ spec:
               }
               spec = {
                 deletionPolicy = _del_policy
-                providerConfigRef = {name = pcfg}
+                providerConfigRef = {name = pcfg, kind = "ClusterProviderConfig"}
                 forProvider = {
                   region = region
                   bucket = name_

@@ -218,6 +218,16 @@ spec:
                   rule = [{
                     applyServerSideEncryptionByDefault = {sseAlgorithm = "AES256"}
                     bucketKeyEnabled = True
+                    # blockedEncryptionTypes NO es opcional aunque lo parezca: AWS lo
+                    # DEVUELVE siempre en GetBucketEncryption (["SSE-C"] por defecto) y
+                    # si no se declara aquí, el diff de upjet nunca converge → el
+                    # provider reescribe la config en BUCLE. Medido 20-ago-2026 en
+                    # zone-non-live: ~5 PutBucketEncryption/s sobre los 4 buckets
+                    # x-docline-storage-* durante 42 días = 987k writes/día ≈ $172/mes,
+                    # y todo el rato con SYNCED=True READY=True ReconcileSuccess.
+                    # Verificado con `aws s3api get-bucket-encryption`:
+                    #   BlockedEncryptionTypes: {EncryptionType: ["SSE-C"]}
+                    blockedEncryptionTypes = ["SSE-C"]
                   }]
                 }
               }
